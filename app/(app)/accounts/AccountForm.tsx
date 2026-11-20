@@ -2,7 +2,14 @@
 
 import { useActionState, useState } from 'react';
 import { saveAccount, type FormState } from './actions';
-import { ACCOUNT_TYPES, CRYPTO_COINS, CURRENCIES, TYPE_LABELS, VALUATION_SOURCES, isDebt, type AccountType } from '@/lib/core/constants';
+import {
+  ACCOUNT_TYPES, COUNTRY_CODES, CRYPTO_COINS, CURRENCIES, PROPERTY_KINDS, TYPE_LABELS, coinSymbol, isDebt, planValuation, type AccountType,
+} from '@/lib/core/constants';
+import { CryptoFields } from '@/components/CryptoFields';
+
+function countryName(code: string) {
+  try { return new Intl.DisplayNames(['en'], { type: 'region' }).of(code) ?? code; } catch { return code; }
+}
 
 export type FormAccount = {
   id: string;
@@ -17,6 +24,7 @@ export type FormAccount = {
   property_country: string | null;
   valuation_source: string | null;
   valuation_area: string | null;
+  property_kind: string | null;
   notes: string | null;
 };
 export type FormShare = { user_id: string | null; external_name: string | null; share_pct: number };
@@ -38,7 +46,18 @@ export function AccountForm(props: {
   const existingMemberShares = (props.shares ?? []).filter((s) => s.user_id);
   const sharedMortgage = a?.type === 'mortgage' && ((props.shares ?? []).length > 1 || (props.shares ?? []).some((s) => s.user_id !== props.me.id));
   const [mode, setMode] = useState<'me' | 'joint'>(existingMemberShares.length > 1 || sharedMortgage ? 'joint' : 'me');
-  const [source, setSource] = useState(a?.valuation_source ?? 'manual');
+  const [currency, setCurrency] = useState(a?.currency ?? props.defaultCurrency);
+  // property value estimate: chosen automatically from what is entered
+  const [autoValue, setAutoValue] = useState(a ? a.valuation_source !== 'manual' : true);
+  const [country, setCountry] = useState(a?.property_country ?? '');
+  const [kind, setKind] = useState(a?.property_kind ?? 'flat');
+  const plan = planValuation(country, kind);
+  // crypto coin: one of the popular ones, or any ticker typed in
+  const initialCoin = coinSymbol(a?.crypto_coin) ?? 'BTC';
+  const known = CRYPTO_COINS.some((c) => c.symbol === initialCoin);
+  const [coinChoice, setCoinChoice] = useState(a && !a.crypto_coin ? '' : known ? initialCoin : 'other');
+  const [otherCoin, setOtherCoin] = useState(known ? '' : initialCoin);
+  const coin = coinChoice === 'other' ? coinSymbol(otherCoin) : coinChoice || null;
   const externals = (props.shares ?? []).filter((s) => s.external_name);
   const shareOf = (id: string, fallback: number) => props.shares?.find((s) => s.user_id === id)?.share_pct ?? fallback;
   const everyone = [props.me, ...props.partners];
@@ -63,20 +82,19 @@ export function AccountForm(props: {
       <div className="grid grid-2" style={{ gap: 14 }}>
         <div className="field">
           <label htmlFor="type">Type</label>
-          {a ? (
-            <>
-              <input type="hidden" name="type" value={type} />
-              <input type="text" value={TYPE_LABELS[type]} disabled />
-            </>
-          ) : (
-            <select id="type" name="type" value={type} onChange={(e) => setType(e.target.value as AccountType)}>
-              {ACCOUNT_TYPES.map((t) => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
-            </select>
+          <select id="type" name="type" value={type} onChange={(e) => setType(e.target.value as AccountType)}>
+            {ACCOUNT_TYPES.map((t) => <option key={t} value={t}>{TYPE_LABELS[t]}</option>)}
+          </select>
+          {a && type !== a.type && (
+            <p className="hint">
+              History is kept.{isDebt(type) !== isDebt(a.type) ? ` Past balances will switch from ${isDebt(a.type) ? 'money owed to money you have' : 'money you have to money owed'}.` : ''}
+              {a.type === 'property' ? ' Mortgages linked to this property will be unlinked.' : ''}
+            </p>
           )}
         </div>
         <div className="field">
           <label htmlFor="currency">Currency</label>
-          <select id="currency" name="currency" defaultValue={a?.currency ?? props.defaultCurrency}>
+          <select id="currency" name="currency" value={currency} onChange={(e) => setCurrency(e.target.value)}>
             {CURRENCIES.map((c) => <option key={c}>{c}</option>)}
           </select>
         </div>
@@ -90,28 +108,42 @@ export function AccountForm(props: {
       {type === 'crypto' && (
         <div className="grid grid-2" style={{ gap: 14 }}>
           <div className="field">
-            <label htmlFor="crypto_coin">Coin</label>
-            <select id="crypto_coin" name="crypto_coin" defaultValue={a?.crypto_coin ?? 'bitcoin'}>
-              {CRYPTO_COINS.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
-              <option value="">Other (enter value myself)</option>
+            <label htmlFor="crypto_coin_choice">Coin</label>
+            <select id="crypto_coin_choice" value={coinChoice} onChange={(e) => setCoinChoice(e.target.value)}>
+              {CRYPTO_COINS.map((c) => <option key={c.symbol} value={c.symbol}>{c.label}</option>)}
+              <option value="other">Another coin…</option>
+              <option value="">None – I’ll enter the value myself</option>
             </select>
           </div>
-          <div className="field">
-            <label htmlFor="crypto_units">How many coins <span className="hint">optional</span></label>
-            <input id="crypto_units" name="crypto_units" type="text" inputMode="decimal" defaultValue={a?.crypto_units ?? ''} placeholder="0.25" />
-          </div>
+          {coinChoice === 'other' && (
+            <div className="field">
+              <label htmlFor="other_coin">Ticker symbol</label>
+              <input id="other_coin" type="text" value={otherCoin} onChange={(e) => setOtherCoin(e.target.value)} placeholder="e.g. AVAX" maxLength={10} />
+            </div>
+          )}
+          <input type="hidden" name="crypto_coin" value={coin ?? ''} />
         </div>
       )}
 
+      {type === 'crypto' && !a ? (
+        <CryptoFields coin={coin} currency={currency} unitsName="crypto_units" valueName="balance" priceName="crypto_price" valueLabel="Current value" />
+      ) : type === 'crypto' && a ? (
+        <div className="field">
+          <label htmlFor="crypto_units">Number of coins</label>
+          <input id="crypto_units" name="crypto_units" type="text" inputMode="decimal" defaultValue={a.crypto_units ?? ''} />
+          <p className="hint">Update the coins and value each month on the check-in page, where the live price is used.</p>
+        </div>
+      ) : (
       <div className="field">
         <label htmlFor="balance">
-          {a ? 'Update this month’s ' : ''}{isDebt(type) ? 'Amount owed' : type === 'property' ? 'Current market value' : type === 'crypto' ? 'Current value' : 'Balance'}
+          {a ? 'Update this month’s ' : ''}{isDebt(type) ? 'Amount owed' : type === 'property' ? 'Current market value' : 'Balance'}
           {' '}<span className="hint">
-            {a ? 'leave empty to keep it as it is' : type === 'crypto' ? 'leave empty to look up the price automatically' : isDebt(type) ? 'enter as a positive number' : ''}
+            {a ? 'leave empty to keep it as it is' : isDebt(type) ? 'enter as a positive number' : ''}
           </span>
         </label>
         <input id="balance" name="balance" type="text" inputMode="decimal" placeholder="0" />
       </div>
+      )}
 
       {type === 'savings' && (
         <div className="field">
@@ -145,27 +177,34 @@ export function AccountForm(props: {
           <legend>Monthly value estimate</legend>
           <div className="grid grid-2" style={{ gap: 14 }}>
             <div className="field">
-              <label htmlFor="valuation_source">Estimate from</label>
-              <select id="valuation_source" name="valuation_source" value={source} onChange={(e) => setSource(e.target.value)}>
-                {VALUATION_SOURCES.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
+              <label htmlFor="property_country">Country</label>
+              <select id="property_country" name="property_country" value={country} onChange={(e) => setCountry(e.target.value)}>
+                <option value="">Choose…</option>
+                {[...COUNTRY_CODES].sort((x, y) => countryName(x).localeCompare(countryName(y))).map((c) => (
+                  <option key={c} value={c}>{countryName(c)}</option>
+                ))}
               </select>
             </div>
             <div className="field">
-              <label htmlFor="property_country">Country code</label>
-              <input id="property_country" name="property_country" type="text" maxLength={2} placeholder="GB / FI"
-                defaultValue={a?.property_country ?? (source === 'uk_hpi' ? 'GB' : source.startsWith('fi_') ? 'FI' : '')} />
+              <label htmlFor="property_kind">Type of home</label>
+              <select id="property_kind" name="property_kind" value={kind} onChange={(e) => setKind(e.target.value)}>
+                {PROPERTY_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+              </select>
             </div>
           </div>
-          {source !== 'manual' && (
+          {plan.areaHint && (
             <div className="field">
-              <label htmlFor="valuation_area">Area</label>
-              <input id="valuation_area" name="valuation_area" type="text" defaultValue={a?.valuation_area ?? ''}
-                placeholder={source === 'uk_hpi' ? 'e.g. london, manchester, city-of-edinburgh' : 'e.g. Helsinki, Espoo, Tampere'} />
-              <p className="hint">
-                Each month the value is moved in line with the official house price index for this area. You can always type your own value at check-in.
-              </p>
+              <label htmlFor="valuation_area">Area <span className="hint">city or region</span></label>
+              <input id="valuation_area" name="valuation_area" type="text" defaultValue={a?.valuation_area ?? ''} placeholder={plan.areaHint} />
             </div>
           )}
+          <label className="check" style={{ marginBottom: 8 }}>
+            <input type="checkbox" name="valuation_auto" checked={autoValue && plan.source !== 'none'} disabled={plan.source === 'none'} onChange={(e) => setAutoValue(e.target.checked)} />
+            <span>
+              Estimate the value each month
+              <br /><span className="hint">{country ? `Source: ${plan.label}.` : 'Choose a country to see which price index will be used.'}{plan.source !== 'none' && ' The value you enter is moved in line with this index; you can always type your own at check-in.'}</span>
+            </span>
+          </label>
         </fieldset>
       )}
 
@@ -265,14 +304,15 @@ export function AccountForm(props: {
 
 function placeholderFor(t: AccountType) {
   switch (t) {
-    case 'bank': return 'e.g. Nordea current account';
-    case 'savings': return 'e.g. Marcus easy access';
+    case 'bank': return 'e.g. Everyday current account';
+    case 'savings': return 'e.g. Easy-access savings';
+    case 'investment': return 'e.g. Stocks & shares account, index funds';
     case 'pension': return 'e.g. Workplace pension';
-    case 'property': return 'e.g. Helsinki flat';
+    case 'property': return 'e.g. Our flat';
     case 'mortgage': return 'e.g. Flat mortgage';
-    case 'credit_card': return 'e.g. Amex';
+    case 'credit_card': return 'e.g. Credit card';
     case 'loan': return 'e.g. Car loan';
     case 'crypto': return 'e.g. Bitcoin wallet';
-    default: return 'e.g. Car, watch, shares';
+    default: return 'e.g. Car, watch, art';
   }
 }

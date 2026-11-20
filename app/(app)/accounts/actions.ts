@@ -5,8 +5,8 @@ import { revalidatePath } from 'next/cache';
 import { requireUser } from '@/lib/session';
 import { withUser, type Db } from '@/lib/db';
 import { getMembers } from '@/lib/data';
-import { cryptoPrice, ensureRatesForMonth } from '@/lib/external';
-import { ACCOUNT_TYPES, CURRENCIES, isDebt, monthStart, toNumber, type AccountType } from '@/lib/core/constants';
+import { cryptoQuote, ensureRatesForMonth } from '@/lib/external';
+import { ACCOUNT_TYPES, CURRENCIES, PROPERTY_KINDS, coinSymbol, isDebt, monthStart, toNumber, type AccountType } from '@/lib/core/constants';
 import { validateShares } from '@/lib/core/calc';
 
 export type FormState = { error: string } | null;
@@ -96,7 +96,8 @@ export async function saveAccount(_prev: FormState, fd: FormData): Promise<FormS
 
   const amount = toNumber(fd.get('balance'));
   const units = type === 'crypto' ? toNumber(fd.get('crypto_units')) : null;
-  const coin = type === 'crypto' ? String(fd.get('crypto_coin') ?? '').trim().toLowerCase() || null : null;
+  const coin = type === 'crypto' ? coinSymbol(String(fd.get('crypto_coin') ?? '')) : null;
+  const kind = String(fd.get('property_kind') ?? '');
   const fields = {
     is_fixed: type === 'savings' && fd.get('is_fixed') === 'on',
     interest_rate: toNumber(fd.get('interest_rate')),
@@ -104,7 +105,8 @@ export async function saveAccount(_prev: FormState, fd: FormData): Promise<FormS
     crypto_coin: coin,
     crypto_units: units,
     property_country: type === 'property' ? String(fd.get('property_country') ?? '').toUpperCase() || null : null,
-    valuation_source: type === 'property' ? String(fd.get('valuation_source') ?? 'manual') : null,
+    valuation_source: type === 'property' ? (fd.get('valuation_auto') === 'on' ? 'auto' : 'manual') : null,
+    property_kind: type === 'property' && PROPERTY_KINDS.some((k) => k.id === kind) ? kind : null,
     valuation_area: type === 'property' ? String(fd.get('valuation_area') ?? '').trim() || null : null,
     notes: String(fd.get('notes') ?? '').trim() || null,
   };
@@ -121,36 +123,69 @@ export async function saveAccount(_prev: FormState, fd: FormData): Promise<FormS
 
       let accountId = id;
       if (accountId) {
+        // Changing the type: keep history, but fix up anything that depends on it.
+        const prev = await db.query<{ type: AccountType }>('select type from accounts where id = $1', [accountId]);
+        const oldType = prev.rows[0]?.type;
+        if (oldType && oldType !== type) {
+          if (isDebt(oldType) !== isDebt(type)) {
+            // debts are stored as negative balances, assets as positive
+            await db.query('update snapshots set balance = -balance where account_id = $1', [accountId]);
+          }
+          if (oldType === 'property') {
+            await db.query('update accounts set linked_property_id = null where linked_property_id = $1', [accountId]);
+            await db.query('delete from property_values where account_id = $1', [accountId]);
+          }
+          if (type === 'property') {
+            await db.query(
+              `insert into property_values (account_id, month, value, source)
+               select account_id, month, abs(balance), 'manual' from snapshots where account_id = $1
+               on conflict (account_id, month) do nothing`,
+              [accountId],
+            );
+          }
+          await db.query('update accounts set type = $2 where id = $1', [accountId, type]);
+        }
         const r = await db.query(
           `update accounts set name = $2, currency = $3, is_joint = $4, household_id = $5, is_fixed = $6, interest_rate = $7,
              linked_property_id = $8, crypto_coin = $9, crypto_units = $10, property_country = $11, valuation_source = $12,
-             valuation_area = $13, notes = $14, updated_at = now()
+             valuation_area = $13, notes = $14, property_kind = $15, updated_at = now()
            where id = $1 returning id`,
           [accountId, name, currency, isJoint, householdId, fields.is_fixed, fields.interest_rate, fields.linked_property_id,
-           fields.crypto_coin, fields.crypto_units, fields.property_country, fields.valuation_source, fields.valuation_area, fields.notes],
+           fields.crypto_coin, fields.crypto_units, fields.property_country, fields.valuation_source, fields.valuation_area, fields.notes,
+           fields.property_kind],
         );
         if (!r.rowCount) throw new UserError('That account was not found.');
       } else {
         const r = await db.query<{ id: string }>(
           `insert into accounts (created_by, household_id, type, name, currency, is_joint, is_fixed, interest_rate, linked_property_id,
-             crypto_coin, crypto_units, property_country, valuation_source, valuation_area, notes)
-           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) returning id`,
+             crypto_coin, crypto_units, property_country, valuation_source, valuation_area, notes, property_kind)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) returning id`,
           [userId, householdId, type, name, currency, isJoint, fields.is_fixed, fields.interest_rate, fields.linked_property_id,
-           fields.crypto_coin, fields.crypto_units, fields.property_country, fields.valuation_source, fields.valuation_area, fields.notes],
+           fields.crypto_coin, fields.crypto_units, fields.property_country, fields.valuation_source, fields.valuation_area, fields.notes,
+           fields.property_kind],
         );
         accountId = r.rows[0].id;
       }
       await writeShares(db, accountId!, shares);
 
       let value = amount;
-      if (value === null && type === 'crypto' && coin && units) {
-        const price = await cryptoPrice(coin, currency);
-        if (price) value = Math.round(price * units * 100) / 100;
+      let unitPrice: number | null = null;
+      let priceSource: string | null = null;
+      if (type === 'crypto' && units) {
+        const [p, src] = String(fd.get('crypto_price') ?? '').split('|');
+        if (toNumber(p)) { unitPrice = toNumber(p); priceSource = src || null; }
+        if (value === null && coin) {
+          const q = await cryptoQuote(coin, currency);
+          if (q) { unitPrice = q.price; priceSource = q.source; value = Math.round(q.price * units * 100) / 100; }
+        }
       }
       if (value !== null) {
         const month = monthStart();
         await ensureRatesForMonth(db, month, [currency, profile.display_currency]);
         await recordBalance(db, userId, accountId!, type, month, isDebt(type) ? -Math.abs(value) : value);
+        if (unitPrice) {
+          await db.query('update snapshots set units = $3, unit_price = $4, price_source = $5 where account_id = $1 and month = $2', [accountId, month, units, unitPrice, priceSource]);
+        }
       }
     });
     revalidatePath('/', 'layout');
@@ -186,12 +221,24 @@ export async function restoreAccount(fd: FormData) {
   redirect('/accounts');
 }
 
-export async function deleteAccount(fd: FormData) {
+export async function deleteAccount(fd: FormData): Promise<{ error: string } | void> {
   const { userId } = await requireUser();
-  if (fd.get('confirm') !== 'yes') redirect(`/accounts/${fd.get('id')}?confirmDelete=1`);
-  await withUser(userId, (db) => db.query('delete from accounts where id = $1', [String(fd.get('id'))]));
+  const id = String(fd.get('id') ?? '');
+  let deleted = 0;
+  try {
+    deleted = await withUser(userId, async (db) => {
+      // Mortgages linked to this account keep their history but lose the link.
+      await db.query('update accounts set linked_property_id = null where linked_property_id = $1', [id]);
+      const r = await db.query('delete from accounts where id = $1', [id]);
+      return r.rowCount ?? 0;
+    });
+  } catch (e) {
+    console.error('deleteAccount failed', e);
+    return { error: 'The account could not be deleted. Please try again.' };
+  }
+  if (!deleted) return { error: 'That account was not found, or you don’t have permission to delete it.' };
   revalidatePath('/', 'layout');
-  redirect('/accounts');
+  redirect('/accounts?deleted=1');
 }
 
 class UserError extends Error {}

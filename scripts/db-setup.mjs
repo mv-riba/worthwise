@@ -10,13 +10,11 @@ for (const f of ['.env.local', '.env']) {
     if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
   }
 }
-// Schema changes go over the direct (non-pooled) connection; fall back to DATABASE_URL.
-const connectionString = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
-if (!connectionString) {
+if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL is not set. Run `neon deploy` first or add it to .env.local');
   process.exit(1);
 }
-const client = new pg.Client({ connectionString });
+const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await client.connect();
 client.on('notice', () => {});
 await client.query(readFileSync(new URL('../db/schema.sql', import.meta.url), 'utf8'));

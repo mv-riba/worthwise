@@ -42,6 +42,8 @@ If a browser window opens asking you to sign in to Neon, finish signing in there
 
    To make the random string, run `openssl rand -base64 32` and copy what it prints.
 
+4. **Turn on email verification.** In the Neon Console → **Auth** → **Settings**, switch on **Verify at Sign-up** and choose **Verification code**. New users then get a 6-digit code by email, and can't sign in until they've entered it. Password reset ("Forgot your password?") also works by emailed code. Neon sends these emails for you; there's no email service to set up.
+
 ### 4. Create the database tables
 
 ```bash
@@ -69,6 +71,13 @@ Open http://localhost:3000. Create an account, add a couple of accounts, then do
 4. Deploy. Then go to **Settings → Domains** and add your domain, e.g. `worthwise.yourdomain.com`.
 5. In Neon's **Auth** settings, add that domain to the list of allowed domains, if it has one, so sign-in works there.
 
+### Installing an update
+
+1. Unzip the new version somewhere else, for example in Downloads.
+2. Open the new folder, select everything inside it (Cmd+A on a Mac, Ctrl+A on Windows) and drag it into your existing project folder. Choose **Replace** when asked. Your `.env.local` (your keys) and `node_modules` aren't in the zip, so they're kept.
+3. Run `npm install`, then `npm run db:setup` to apply any database changes. It's safe to run again, and your data is kept.
+4. Restart `npm run dev`, or commit and push to GitHub so Vercel redeploys.
+
 ---
 
 ## How it works
@@ -80,7 +89,7 @@ Open http://localhost:3000. Create an account, add a couple of accounts, then do
 | **profiles** | One row per person: name, email, preferred display currency and which household they belong to. |
 | **households** | Groups partners together, with an invite code to join. |
 | **accounts** | Every account or asset. Each has a type, a currency and a joint flag. Mortgages can link to a property. Debts are stored as negative numbers. |
-| **ownership_shares** | Who owns what percentage. An individual account has one row at 100%. A joint one has a row per partner (default 50/50). A property can also list co-owners outside the app, e.g. "Mum 40%". |
+| **ownership_shares** | Who owns what percentage. An individual account has one row at 100%. A joint one has a row per partner (default 50/50). Properties and mortgages can also list people outside the app, e.g. "Mum 40%". |
 | **snapshots** | One balance per account per month, in the account's own currency. |
 | **checkins** | One row per person per month: income, and the spending estimate worked out at the time. |
 | **property_values** | Each property's monthly market value, and whether it came from the price index or from you. |
@@ -98,20 +107,29 @@ Open http://localhost:3000. Create an account, add a couple of accounts, then do
 ### The maths
 
 - **Your share:** each account counts at your ownership percentage. Joint items are stored once, so the combined total never counts them twice.
-- **Equity:** your % of the property's value, minus your share of each mortgage linked to it. Property ownership and mortgage ownership are tracked separately.
+- **Equity:** your % of the property's value, minus your share of each mortgage linked to it. Property ownership and mortgage ownership are tracked separately. A new mortgage is yours alone (100%) unless you choose **Shared**. You then enter each holder's share; holders can be people in your household or outside the app. A **Use the same split as the property** button copies the property's percentages, but only if you click it.
 - **Currencies:** each balance is converted at that month's rate. Rates come from the European Central Bank via [Frankfurter](https://frankfurter.dev) (free, no key), and are stored with each month.
-- **Spending estimate:** income minus the change in bank, non-fixed savings and credit card balances, each counted at your share. Changes are measured in the account's own currency, so exchange-rate swings don't look like spending. Fixed savings, pensions, property and crypto are left out. It's always labelled as an estimate.
+- **Spending estimate:** income minus the change in bank, non-fixed savings and credit card balances, each counted at your share. Changes are measured in the account's own currency, so exchange-rate swings don't look like spending. Fixed savings, investments, pensions, property and crypto are left out. It's always labelled as an estimate.
 - **Portfolio growth:** the change in everything else (pensions, property, crypto, fixed savings, mortgages).
-- **Property estimates:** each month, the last known value is moved in line with the official house price index for the area: *new value = last value × latest index ÷ index when that value was set*. You can always type your own figure, and the history of values is kept.
-  - UK: [HM Land Registry UK House Price Index](https://landregistry.data.gov.uk/app/ukhpi). The area is a region slug such as `london`, `manchester` or `city-of-edinburgh`.
-  - Finland: [Statistics Finland](https://pxdata.stat.fi) price indices for flats (`StatFin/ashi/15iq.px`) and detached houses (`StatFin/kihi/15hx.px`). The area is a name such as `Helsinki`. If no area matches, the whole country is used. If Statistics Finland renames these tables, set `FI_APARTMENTS_TABLE` / `FI_HOUSES_TABLE` in the environment variables.
-  - A paid per-address valuation API could be added later in `lib/external.ts` (`fetchPriceIndex`).
-- **Crypto:** if you enter the number of coins, the value is worked out from the [CoinGecko](https://www.coingecko.com) price at check-in.
+- **Property estimates:** each month, the last known value is moved in line with a house price index: *new value = last value × latest index ÷ index when that value was set*. You can always type your own figure, and the history of values is kept. Which index is used depends on the **country**, **area** and **type of home** you enter for the property (`planValuation` in `lib/core/constants.ts`):
+  - United Kingdom: [HM Land Registry UK House Price Index](https://landregistry.data.gov.uk/app/ukhpi) for the area you type (e.g. "London"), using the flat or terraced index where the type matches. If the area isn't recognised, the UK-wide index is used.
+  - Finland: [Statistics Finland](https://pxdata.stat.fi). Flats and terraced houses use table `StatFin/ashi/15iq.px`, monthly by city (e.g. "Helsinki"). Detached houses use `StatFin/kihi/15hx.px`, quarterly by region (e.g. "Greater Helsinki"). If an area isn't recognised, the whole country is used. If Statistics Finland renames these tables, set `FI_APARTMENTS_TABLE` / `FI_HOUSES_TABLE`.
+  - Other EU and EEA countries (plus Switzerland and Turkey): the [Eurostat](https://ec.europa.eu/eurostat) national house price index, quarterly, for the whole country.
+  - Anywhere else: you enter the value yourself. More countries can be added in `planValuation` and `fetchPriceIndex` (`lib/external.ts`).
+  - The indices are published 1–3 months behind, so estimates move in steps.
+- **Crypto:** choose a coin, or type any ticker symbol, and enter the number of coins. The value updates live from the current price as you type, using [Coinbase](https://www.coinbase.com) with [CoinGecko](https://www.coingecko.com) as a backup. The number of coins and the price used are saved with that month's snapshot. You can still type your own value instead.
+- **Investment accounts:** stocks and shares accounts, funds and similar, in any country. Enter the total value each month. Changes count as portfolio growth, not spending.
 - **Suggestions:** simple rules in `lib/core/suggestions.ts`. They cover idle cash, a thin emergency buffer, card debt alongside savings, the crypto share of assets, spending compared with income, growth compared with spending, and a missing pension. Each one carries a "general information, not financial advice" note.
 
-### Monthly check-in
+### Monthly check-in and history
 
 The dashboard shows a reminder banner until you've checked in for the current month. On the check-in page you can choose any past month, which is how you'll add history from your Excel sheets (each month is saved with that month's exchange rates).
+
+**Income** is optional, but it's what makes the spending estimate possible. Balances show how much your cash changed; income tells the app why. For example, €3,000 income with €500 more in the bank means about €2,500 spent.
+
+The **History** page lists every month you've checked in. **Edit** opens that month so you can correct figures (saving replaces the old ones). **Delete** removes that month's income and the balances you entered for it; balances your partner entered for joint accounts are kept. Each account's page also lists its past balances with an Edit link.
+
+**Deleting an account** removes that one account and all its history. It doesn't delete your Worthwise login. **Closing** an account instead keeps its history and sets it to zero from this month.
 
 ---
 
@@ -120,9 +138,11 @@ The dashboard shows a reminder banner until you've checked in for the current mo
 ```
 app/
   page.tsx                 landing page
-  auth/                    sign in / sign up (Neon Auth)
+  auth/                    sign in, sign up, email verification, forgot/reset password (Neon Auth)
+  api/price/               live crypto prices for the forms
   api/auth/[...path]/      Neon Auth API route
   (app)/dashboard/         totals, trend, spending vs growth, breakdown, equity, suggestions
+  (app)/history/           past check-ins: edit or delete a month
   (app)/check-in/          monthly check-in form + save
   (app)/accounts/          list, add, edit, close, delete
   (app)/household/         create / join / leave household

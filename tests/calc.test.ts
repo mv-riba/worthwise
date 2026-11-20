@@ -109,3 +109,28 @@ test('suggestions fire on the right conditions', () => {
   assert.ok(ids({ ...base, recentGrowth: [3000, 3000, 3000] }).includes('growth'));
   assert.ok(ids({ ...base, hasPension: false }).includes('pension'));
 });
+
+import { planValuation, coinSymbol, CATEGORY_OF } from '../lib/core/constants.ts';
+
+test('property value source follows what was entered', () => {
+  assert.equal(planValuation('GB', 'flat').source, 'uk_hpi');
+  assert.equal(planValuation('FI', 'flat').source, 'fi_apartments');
+  assert.equal(planValuation('FI', 'terraced').source, 'fi_apartments');
+  assert.equal(planValuation('FI', 'house').source, 'fi_houses');
+  assert.equal(planValuation('se', 'house').source, 'eurostat');
+  assert.equal(planValuation('US', 'house').source, 'none');
+  assert.equal(planValuation('', null).source, 'none');
+});
+
+test('crypto symbols, including old CoinGecko ids', () => {
+  assert.equal(coinSymbol('bitcoin'), 'BTC');
+  assert.equal(coinSymbol('eth'), 'ETH');
+  assert.equal(coinSymbol(' avax '), 'AVAX');
+  assert.equal(coinSymbol('not a coin!'), null);
+});
+
+test('Eurostat quarter labels and investments category', () => {
+  assert.equal(periodToMonth('2025-Q1'), '2025-01-01');
+  assert.equal(periodToMonth('2026-Q4'), '2026-10-01');
+  assert.equal(CATEGORY_OF.investment, 'Investments');
+});

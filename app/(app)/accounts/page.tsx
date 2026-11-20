@@ -5,9 +5,10 @@ import { getAccounts, getShares } from '@/lib/data';
 import { CATEGORY_OF, TYPE_LABELS, formatMoney, monthLabel, type Category } from '@/lib/core/constants';
 import { restoreAccount } from './actions';
 
-const ORDER: Category[] = ['Cash', 'Property', 'Pensions', 'Crypto', 'Other assets', 'Mortgages', 'Other debts'];
+const ORDER: Category[] = ['Cash', 'Investments', 'Property', 'Pensions', 'Crypto', 'Other assets', 'Mortgages', 'Other debts'];
 
-export default async function AccountsPage() {
+export default async function AccountsPage({ searchParams }: { searchParams: Promise<{ deleted?: string }> }) {
+  const sp = await searchParams;
   const { userId } = await requireUser();
   const { accounts, shares } = await withUser(userId, async (db) => {
     const accounts = await getAccounts(db, userId, { includeArchived: true });
@@ -22,6 +23,7 @@ export default async function AccountsPage() {
         <h1>Accounts</h1>
         <Link className="btn" href="/accounts/new">+ Add account</Link>
       </div>
+      {sp.deleted && <p className="notice">The account was deleted.</p>}
       {active.length === 0 && (
         <div className="card">
           <h2>Let’s add your first account</h2>

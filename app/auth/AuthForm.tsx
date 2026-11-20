@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useActionState } from 'react';
 import { signInWithEmail, signUpWithEmail, type AuthState } from './actions';
 
-export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
+export function AuthForm({ mode, notice }: { mode: 'sign-in' | 'sign-up'; notice?: string }) {
   const action = mode === 'sign-in' ? signInWithEmail : signUpWithEmail;
   const [state, formAction, pending] = useActionState<AuthState, FormData>(action, null);
 
@@ -19,6 +19,7 @@ export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
           <p className="muted small">
             {mode === 'sign-in' ? 'Sign in with your email and password.' : 'Each person in your household gets their own login.'}
           </p>
+          {notice && <p className="notice small">{notice}</p>}
           <form action={formAction}>
             {mode === 'sign-up' && (
               <div className="field">
@@ -41,6 +42,9 @@ export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
             <button className="btn" type="submit" disabled={pending} style={{ width: '100%' }}>
               {pending ? 'One moment…' : mode === 'sign-in' ? 'Sign in' : 'Create account'}
             </button>
+            {mode === 'sign-in' && (
+              <p className="small" style={{ textAlign: 'center', marginTop: 12, marginBottom: 0 }}><Link href="/auth/forgot-password">Forgot your password?</Link></p>
+            )}
           </form>
           <p className="small muted" style={{ marginTop: 16, textAlign: 'center' }}>
             {mode === 'sign-in' ? (

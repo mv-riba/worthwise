@@ -1,5 +1,4 @@
 import { Pool, types, type PoolClient } from 'pg';
-import { attachDatabasePool } from '@vercel/functions';
 
 // Return NUMERIC as JS numbers and DATE as plain 'YYYY-MM-DD' strings.
 types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
@@ -7,19 +6,13 @@ types.setTypeParser(1082, (v) => v);
 
 const globalForPg = globalThis as unknown as { __worthwisePool?: Pool };
 
-function createPool(): Pool {
-  // DATABASE_URL is Neon's pooled (-pooler) connection string, written by `neon deploy`.
-  const p = new Pool({
+export const pool: Pool =
+  globalForPg.__worthwisePool ??
+  new Pool({
     connectionString: process.env.DATABASE_URL,
     max: 5,
     idleTimeoutMillis: 10_000,
   });
-  // On Vercel Fluid compute, lets idle connections close cleanly before an instance is suspended.
-  attachDatabasePool(p);
-  return p;
-}
-
-export const pool: Pool = globalForPg.__worthwisePool ?? createPool();
 globalForPg.__worthwisePool = pool;
 
 export type Db = PoolClient;

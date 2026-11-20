@@ -95,7 +95,7 @@ export function estimateFromIndex(baseline: { month: string; value: number; inde
 export function periodToMonth(period: string): string | null {
   let m = /^(\d{4})M(\d{2})$/.exec(period);
   if (m) return `${m[1]}-${m[2]}-01`;
-  m = /^(\d{4})Q([1-4])$/.exec(period);
+  m = /^(\d{4})-?Q([1-4])$/.exec(period);
   if (m) return `${m[1]}-${String((Number(m[2]) - 1) * 3 + 1).padStart(2, '0')}-01`;
   m = /^(\d{4})-(\d{2})/.exec(period);
   if (m) return `${m[1]}-${m[2]}-01`;

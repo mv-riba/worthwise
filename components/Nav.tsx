@@ -7,6 +7,7 @@ const LINKS = [
   { href: '/dashboard', label: 'Dashboard' },
   { href: '/check-in', label: 'Check-in' },
   { href: '/accounts', label: 'Accounts' },
+  { href: '/history', label: 'History' },
   { href: '/household', label: 'Household' },
   { href: '/settings', label: 'Settings' },
 ];

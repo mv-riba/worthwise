@@ -9,7 +9,7 @@ import { buildSeries, categoryBreakdown, propertyCards, suggestionsFor, type Vie
 import { BarPairs, Change, LineChart } from '@/components/Charts';
 
 const CAT_COLORS: Record<string, string> = {
-  Cash: '#7c85f0', Property: '#f6d56e', Pensions: '#a9aff7', Crypto: '#f2846c',
+  Cash: '#7c85f0', Investments: '#5f68d6', Property: '#f6d56e', Pensions: '#a9aff7', Crypto: '#f2846c',
   'Other assets': '#c7b9e8', Mortgages: '#e0a090', 'Other debts': '#f2846c',
 };
 
@@ -106,7 +106,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
         <div className="card">
           <div className="card-title">Portfolio growth {si >= 0 && `· ${monthLabel(s.months[si])}`}</div>
           <div className="mid num">{si >= 0 && s.otherChange[si] !== null ? formatMoney(s.otherChange[si], display, { sign: true }) : '–'}</div>
-          <p className="small muted" style={{ marginBottom: 0 }}>Change in pensions, property, crypto, fixed savings and mortgages.</p>
+          <p className="small muted" style={{ marginBottom: 0 }}>Change in investments, pensions, property, crypto, fixed savings and mortgages.</p>
         </div>
 
         <div className="card span-2">
@@ -159,7 +159,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
             currency={display}
           />
           <p className="tiny muted" style={{ marginTop: 8, marginBottom: 0 }}>
-            Spending is estimated as income minus the change in bank, savings and credit card balances. Fixed savings, pensions, property and crypto are left out; interest on other accounts is ignored.
+            Spending is estimated as income minus the change in bank, savings and credit card balances. Fixed savings, investments, pensions, property and crypto are left out; interest on other accounts is ignored.
           </p>
         </div>
 

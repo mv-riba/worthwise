@@ -1,13 +1,14 @@
 // Shared constants and pure helpers (no server-only imports, safe in tests).
 
 export const ACCOUNT_TYPES = [
-  'bank', 'savings', 'pension', 'property', 'mortgage', 'credit_card', 'loan', 'crypto', 'other_asset',
+  'bank', 'savings', 'investment', 'pension', 'property', 'mortgage', 'credit_card', 'loan', 'crypto', 'other_asset',
 ] as const;
 export type AccountType = (typeof ACCOUNT_TYPES)[number];
 
 export const TYPE_LABELS: Record<AccountType, string> = {
   bank: 'Bank account',
   savings: 'Savings account',
+  investment: 'Investment account',
   pension: 'Pension',
   property: 'Property',
   mortgage: 'Mortgage',
@@ -20,10 +21,11 @@ export const TYPE_LABELS: Record<AccountType, string> = {
 export const DEBT_TYPES: AccountType[] = ['mortgage', 'credit_card', 'loan'];
 export const isDebt = (t: string) => (DEBT_TYPES as string[]).includes(t);
 
-export type Category = 'Cash' | 'Property' | 'Pensions' | 'Crypto' | 'Other assets' | 'Mortgages' | 'Other debts';
+export type Category = 'Cash' | 'Investments' | 'Property' | 'Pensions' | 'Crypto' | 'Other assets' | 'Mortgages' | 'Other debts';
 export const CATEGORY_OF: Record<AccountType, Category> = {
   bank: 'Cash',
   savings: 'Cash',
+  investment: 'Investments',
   property: 'Property',
   pension: 'Pensions',
   crypto: 'Crypto',
@@ -44,20 +46,68 @@ export const CURRENCIES = [
   'CAD', 'AUD', 'NZD', 'JPY', 'CNY', 'HKD', 'SGD', 'INR', 'KRW', 'ZAR', 'MXN', 'BRL', 'TRY', 'ILS',
 ] as const;
 
-export const CRYPTO_COINS: { id: string; label: string }[] = [
-  { id: 'bitcoin', label: 'Bitcoin (BTC)' },
-  { id: 'ethereum', label: 'Ethereum (ETH)' },
-  { id: 'solana', label: 'Solana (SOL)' },
-  { id: 'cardano', label: 'Cardano (ADA)' },
-  { id: 'ripple', label: 'XRP' },
+/** Popular coins; any other ticker symbol can be typed in. */
+export const CRYPTO_COINS: { symbol: string; label: string }[] = [
+  { symbol: 'BTC', label: 'Bitcoin (BTC)' },
+  { symbol: 'ETH', label: 'Ethereum (ETH)' },
+  { symbol: 'SOL', label: 'Solana (SOL)' },
+  { symbol: 'XRP', label: 'XRP' },
+  { symbol: 'ADA', label: 'Cardano (ADA)' },
+  { symbol: 'DOGE', label: 'Dogecoin (DOGE)' },
+  { symbol: 'LTC', label: 'Litecoin (LTC)' },
+  { symbol: 'DOT', label: 'Polkadot (DOT)' },
 ];
 
-export const VALUATION_SOURCES = [
-  { id: 'uk_hpi', label: 'UK House Price Index (HM Land Registry)', country: 'GB' },
-  { id: 'fi_apartments', label: 'Statistics Finland – flats in housing companies', country: 'FI' },
-  { id: 'fi_houses', label: 'Statistics Finland – detached houses', country: 'FI' },
-  { id: 'manual', label: 'I will enter the value myself', country: '' },
+/** Older records stored CoinGecko ids; map them to ticker symbols. */
+const LEGACY_COIN_IDS: Record<string, string> = {
+  bitcoin: 'BTC', ethereum: 'ETH', solana: 'SOL', cardano: 'ADA', ripple: 'XRP', dogecoin: 'DOGE', litecoin: 'LTC', polkadot: 'DOT',
+};
+export function coinSymbol(v: string | null | undefined): string | null {
+  if (!v) return null;
+  const t = v.trim();
+  return LEGACY_COIN_IDS[t.toLowerCase()] ?? (/^[A-Za-z0-9]{2,10}$/.test(t) ? t.toUpperCase() : null);
+}
+
+// ----- property -----
+export const PROPERTY_KINDS = [
+  { id: 'flat', label: 'Flat / apartment' },
+  { id: 'terraced', label: 'Terraced or town house' },
+  { id: 'house', label: 'Detached or semi-detached house' },
 ] as const;
+export type PropertyKind = (typeof PROPERTY_KINDS)[number]['id'];
+
+/** Countries covered by Eurostat's national house price index. Eurostat uses EL for Greece. */
+export const EUROSTAT_COUNTRIES: Record<string, string> = {
+  AT: 'AT', BE: 'BE', BG: 'BG', HR: 'HR', CY: 'CY', CZ: 'CZ', DK: 'DK', EE: 'EE', FI: 'FI', FR: 'FR', DE: 'DE', GR: 'EL',
+  HU: 'HU', IE: 'IE', IT: 'IT', LV: 'LV', LT: 'LT', LU: 'LU', MT: 'MT', NL: 'NL', PL: 'PL', PT: 'PT', RO: 'RO', SK: 'SK',
+  SI: 'SI', ES: 'ES', SE: 'SE', IS: 'IS', NO: 'NO', CH: 'CH', TR: 'TR',
+};
+
+/** Country choices for properties. */
+export const COUNTRY_CODES = [
+  'GB', 'FI', 'IE', 'SE', 'NO', 'DK', 'IS', 'EE', 'LV', 'LT', 'PL', 'DE', 'NL', 'BE', 'LU', 'FR', 'ES', 'PT', 'IT', 'MT',
+  'GR', 'CY', 'AT', 'CH', 'CZ', 'SK', 'HU', 'SI', 'HR', 'RO', 'BG', 'TR', 'US', 'CA', 'AU', 'NZ', 'JP', 'SG', 'HK', 'AE', 'ZA', 'BR', 'MX', 'IN',
+];
+
+export type ValuationSource = 'uk_hpi' | 'fi_apartments' | 'fi_houses' | 'eurostat' | 'none';
+export type ValuationPlan = { source: ValuationSource; label: string; areaHint: string | null };
+
+/**
+ * Picks the best free price index for what was entered: area-level official
+ * statistics where available (UK, Finland), otherwise Eurostat's national index,
+ * otherwise none (the value is entered by hand). Add more countries here.
+ */
+export function planValuation(country: string | null | undefined, kind: string | null | undefined): ValuationPlan {
+  const c = (country ?? '').toUpperCase();
+  if (c === 'GB') return { source: 'uk_hpi', label: 'UK House Price Index (HM Land Registry), by area', areaHint: 'e.g. London, Manchester, City of Edinburgh' };
+  if (c === 'FI') {
+    return kind === 'house'
+      ? { source: 'fi_houses', label: 'Statistics Finland – one-dwelling houses, by region', areaHint: 'e.g. Greater Helsinki, Southern Finland' }
+      : { source: 'fi_apartments', label: 'Statistics Finland – housing-company dwellings, by city', areaHint: 'e.g. Helsinki, Espoo, Tampere' };
+  }
+  if (EUROSTAT_COUNTRIES[c]) return { source: 'eurostat', label: 'Eurostat national house price index (whole country)', areaHint: null };
+  return { source: 'none', label: 'No free price index for this country yet – you’ll enter the value yourself', areaHint: null };
+}
 
 // ----- months -----
 export function monthStart(d = new Date()): string {

@@ -17,6 +17,7 @@ export type AccountRow = {
   property_country: string | null;
   valuation_source: string | null;
   valuation_area: string | null;
+  property_kind: string | null;
   notes: string | null;
   archived: boolean;
   my_share: number;
@@ -61,7 +62,7 @@ export async function getAccounts(db: Db, userId: string, opts: { includeArchive
          select balance, month from snapshots s where s.account_id = a.id order by month desc limit 1
        ) ls on true
       where ($2 or not a.archived)
-      order by a.archived, array_position(array['bank','savings','pension','property','mortgage','credit_card','loan','crypto','other_asset']::text[], a.type), a.name`,
+      order by a.archived, array_position(array['bank','savings','investment','pension','property','mortgage','credit_card','loan','crypto','other_asset']::text[], a.type), a.name`,
     [userId, !!opts.includeArchived],
   );
   return r.rows;
@@ -100,7 +101,7 @@ export async function getPreviousBalances(db: Db, month: string) {
 }
 
 export type PropertyValueRow = {
-  account_id: string; month: string; value: number; source: string; index_value: number | null; index_period: string | null;
+  account_id: string; month: string; value: number; source: string; index_value: number | null; index_period: string | null; note: string | null;
 };
 
 export async function getPropertyValues(db: Db, accountIds: string[]): Promise<PropertyValueRow[]> {

@@ -8,13 +8,12 @@ import { LineChart } from '@/components/Charts';
 import { AccountForm } from '../AccountForm';
 import { groupShares } from '../shares';
 import { archiveAccount, deleteAccount } from '../actions';
+import { ConfirmButton } from '@/components/ConfirmButton';
 
-export default async function EditAccountPage({ params, searchParams }: {
+export default async function EditAccountPage({ params }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ confirmDelete?: string }>;
 }) {
   const { id } = await params;
-  const sp = await searchParams;
   const { userId, profile } = await requireUser();
   const data = await withUser(userId, async (db) => {
     const accounts = await getAccounts(db, userId, { includeArchived: true });
@@ -55,15 +54,30 @@ export default async function EditAccountPage({ params, searchParams }: {
               currency={a.currency}
               height={200}
             />
+            {a.type !== 'property' && data.history.length > 0 && (
+              <table className="table small" style={{ marginTop: 10 }}>
+                <thead><tr><th>Month</th><th className="right">Balance</th><th></th></tr></thead>
+                <tbody>
+                  {[...data.history].reverse().slice(0, 12).map((h) => (
+                    <tr key={h.month}>
+                      <td>{monthLabel(h.month)}</td>
+                      <td className="right num">{formatMoney(h.balance, a.currency)}</td>
+                      <td className="right"><Link href={`/check-in?month=${h.month.slice(0, 7)}`}>Edit</Link></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
             {a.type === 'property' && data.values.length > 0 && (
               <table className="table small" style={{ marginTop: 10 }}>
-                <thead><tr><th>Month</th><th>Value</th><th>Source</th></tr></thead>
+                <thead><tr><th>Month</th><th>Value</th><th>Source</th><th></th></tr></thead>
                 <tbody>
                   {[...data.values].reverse().slice(0, 12).map((v) => (
                     <tr key={v.month}>
                       <td>{monthLabel(v.month)}</td>
                       <td className="num">{formatMoney(v.value, a.currency)}</td>
                       <td className="muted">{v.source === 'manual' ? 'Entered by you' : `Index ${v.index_period ?? ''}`}</td>
+                      <td className="right"><Link href={`/check-in?month=${v.month.slice(0, 7)}`}>Edit</Link></td>
                     </tr>
                   ))}
                 </tbody>
@@ -77,11 +91,10 @@ export default async function EditAccountPage({ params, searchParams }: {
               {!a.archived && (
                 <form action={archiveAccount}><input type="hidden" name="id" value={a.id} /><button className="btn secondary small">Close account</button></form>
               )}
-              <form action={deleteAccount}>
-                <input type="hidden" name="id" value={a.id} />
-                {sp.confirmDelete && <input type="hidden" name="confirm" value="yes" />}
-                <button className="btn coral small">{sp.confirmDelete ? 'Yes, delete it for good' : 'Delete'}</button>
-              </form>
+              <ConfirmButton
+                action={deleteAccount} fields={{ id: a.id }}
+                label="Delete" confirmLabel="Yes, delete it" question="Delete this account and all its history?"
+              />
             </div>
           </div>
         </div>

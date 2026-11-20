@@ -19,7 +19,7 @@ export default async function Landing() {
         <div>
           <h1>See your household’s net worth grow, month by month.</h1>
           <p className="muted" style={{ fontSize: '1.15rem' }}>
-            A once-a-month check-in for your bank accounts, savings, pensions, property and crypto.
+            A once-a-month check-in for your bank accounts, savings, investments, pensions, property and crypto.
             Worthwise adds it all up across currencies, shows the trend and estimates your spending.
             No bank connections, ever.
           </p>

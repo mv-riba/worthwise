@@ -52,7 +52,7 @@ create table if not exists accounts (
   created_by          text not null references profiles(user_id) on delete cascade,
   household_id        uuid references households(id) on delete set null,
   type                text not null check (type in (
-                        'bank', 'savings', 'pension', 'property', 'mortgage',
+                        'bank', 'savings', 'investment', 'pension', 'property', 'mortgage',
                         'credit_card', 'loan', 'crypto', 'other_asset')),
   name                text not null,
   currency            char(3) not null,
@@ -60,11 +60,12 @@ create table if not exists accounts (
   is_fixed            boolean not null default false,      -- savings: no deposits/withdrawals
   interest_rate       numeric(6,3),                        -- % per year (optional)
   linked_property_id  uuid references accounts(id) on delete set null,  -- mortgages
-  crypto_coin         text,                                -- e.g. 'bitcoin'
+  crypto_coin         text,                                -- ticker, e.g. 'BTC'
   crypto_units        numeric(30,10),
   property_country    char(2),                             -- 'GB', 'FI', ...
-  valuation_source    text check (valuation_source in ('uk_hpi', 'fi_apartments', 'fi_houses', 'manual')),
-  valuation_area      text,                                -- e.g. 'london' or 'Helsinki'
+  valuation_source    text check (valuation_source in ('auto', 'manual', 'uk_hpi', 'fi_apartments', 'fi_houses')),
+  valuation_area      text,                                -- e.g. 'London' or 'Helsinki'
+  property_kind       text check (property_kind in ('flat', 'terraced', 'house')),
   notes               text,
   archived            boolean not null default false,
   created_at          timestamptz not null default now(),
@@ -93,7 +94,7 @@ create index if not exists ownership_user_idx on ownership_shares(user_id);
 create table if not exists checkins (
   user_id             text not null references profiles(user_id) on delete cascade,
   month               date not null check (month = date_trunc('month', month)::date),
-  income              numeric(14,2) not null default 0,
+  income              numeric(14,2),                       -- empty = not entered (no spending estimate)
   income_currency     char(3) not null,
   estimated_spending  numeric(14,2),
   completed_at        timestamptz not null default now(),
@@ -105,6 +106,9 @@ create table if not exists snapshots (
   account_id   uuid not null references accounts(id) on delete cascade,
   month        date not null check (month = date_trunc('month', month)::date),
   balance      numeric(16,2) not null,
+  units        numeric(30,10),                 -- crypto: coins held at the time
+  unit_price   numeric(24,8),                  -- crypto: price per coin used
+  price_source text,
   recorded_by  text,
   recorded_at  timestamptz not null default now(),
   primary key (account_id, month)
@@ -132,6 +136,24 @@ create table if not exists exchange_rates (
   fetched_at  timestamptz not null default now(),
   primary key (month, currency)
 );
+
+-- ---------------------------------------------------------------------
+-- 1b. Updates for databases created with an earlier version of this file
+-- ---------------------------------------------------------------------
+alter table accounts add column if not exists property_kind text;
+alter table accounts drop constraint if exists accounts_type_check;
+alter table accounts add constraint accounts_type_check check (type in (
+  'bank', 'savings', 'investment', 'pension', 'property', 'mortgage', 'credit_card', 'loan', 'crypto', 'other_asset'));
+alter table accounts drop constraint if exists accounts_valuation_source_check;
+alter table accounts add constraint accounts_valuation_source_check
+  check (valuation_source in ('auto', 'manual', 'uk_hpi', 'fi_apartments', 'fi_houses'));
+alter table accounts drop constraint if exists accounts_property_kind_check;
+alter table accounts add constraint accounts_property_kind_check check (property_kind in ('flat', 'terraced', 'house'));
+alter table snapshots add column if not exists units numeric(30,10);
+alter table snapshots add column if not exists unit_price numeric(24,8);
+alter table snapshots add column if not exists price_source text;
+alter table checkins alter column income drop not null;
+alter table checkins alter column income drop default;
 
 -- ---------------------------------------------------------------------
 -- 2. Helper functions used by the security rules
@@ -301,7 +323,7 @@ language sql stable security definer set search_path = public as $$
     case when t.has_prev then round(t.cash_change, 2) end,
     case when t.has_prev then round(t.other_change, 2) end,
     round(fx(c.income, c.income_currency, p_display, t.month), 2),
-    case when t.has_prev and c.user_id is not null
+    case when t.has_prev and c.income is not null
          then round(fx(c.income, c.income_currency, p_display, t.month) - t.cash_change, 2) end
   from totals t
   join members m on m.user_id = t.user_id
