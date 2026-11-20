@@ -6,6 +6,7 @@ import { getAccounts, getMembers, getPropertyValues, getShares } from '@/lib/dat
 import { formatMoney, monthLabel } from '@/lib/core/constants';
 import { LineChart } from '@/components/Charts';
 import { AccountForm } from '../AccountForm';
+import { groupShares } from '../shares';
 import { archiveAccount, deleteAccount } from '../actions';
 
 export default async function EditAccountPage({ params, searchParams }: {
@@ -19,13 +20,14 @@ export default async function EditAccountPage({ params, searchParams }: {
     const accounts = await getAccounts(db, userId, { includeArchived: true });
     const account = accounts.find((a) => a.id === id);
     if (!account) return null;
-    const [shares, members, values, history] = await Promise.all([
+    const [shares, propShares, members, values, history] = await Promise.all([
       getShares(db, [id]),
+      account.type === 'mortgage' ? getShares(db, accounts.filter((x) => x.type === 'property').map((x) => x.id)) : Promise.resolve([]),
       getMembers(db),
       account.type === 'property' ? getPropertyValues(db, [id]) : Promise.resolve([]),
       db.query<{ month: string; balance: number }>('select month, balance from snapshots where account_id = $1 order by month', [id]),
     ]);
-    return { account, accounts, shares, members, values, history: history.rows };
+    return { account, accounts, shares, propShares, members, values, history: history.rows };
   });
   if (!data) notFound();
   const { account: a } = data;
@@ -41,6 +43,7 @@ export default async function EditAccountPage({ params, searchParams }: {
           me={{ id: userId, name: profile.name || 'Me' }}
           partners={data.members.filter((m) => m.user_id !== userId).map((m) => ({ id: m.user_id, name: m.name || m.email || 'Partner' }))}
           properties={data.accounts.filter((x) => x.type === 'property' && x.id !== a.id).map((x) => ({ id: x.id, name: x.name }))}
+          propertyShares={groupShares(data.propShares)}
           defaultCurrency={profile.display_currency}
         />
         <div className="stack">

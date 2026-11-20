@@ -14,8 +14,33 @@ export type FormState = { error: string } | null;
 type ShareInput = { user_id: string | null; external_name: string | null; pct: number };
 
 function readShares(fd: FormData, type: AccountType, userId: string, memberIds: string[]): ShareInput[] | string {
-  const joint = fd.get('owner_mode') === 'joint' && memberIds.length > 1;
   const shares: ShareInput[] = [];
+  const readExternals = (who: string) => {
+    for (let i = 0; i < 3; i++) {
+      const name = String(fd.get(`ext_name_${i}`) ?? '').trim();
+      const pct = toNumber(fd.get(`ext_pct_${i}`));
+      if (name && pct && pct > 0) shares.push({ user_id: null, external_name: name, pct });
+      else if (name || pct) return `Each ${who} outside the app needs both a name and a percentage.`;
+    }
+    return null;
+  };
+
+  // Mortgages: "just me" by default; when shared, the user chooses who holds
+  // which share. Holders can be household members and/or people outside the app,
+  // and don't have to match the property's owners.
+  if (type === 'mortgage') {
+    if (fd.get('owner_mode') !== 'joint') return [{ user_id: userId, external_name: null, pct: 100 }];
+    for (const id of memberIds) {
+      const pct = toNumber(fd.get(`share:${id}`));
+      if (pct && pct > 0) shares.push({ user_id: id, external_name: null, pct });
+    }
+    const extErr = readExternals('mortgage holder');
+    if (extErr) return extErr;
+    if (!shares.some((s) => s.user_id)) return 'At least one holder of the mortgage needs to be you or someone in your household.';
+    return validateShares(shares.map((s) => ({ pct: s.pct })), true) ?? shares;
+  }
+
+  const joint = fd.get('owner_mode') === 'joint' && memberIds.length > 1;
   if (joint) {
     for (const id of memberIds) {
       const pct = toNumber(fd.get(`share:${id}`));
@@ -27,12 +52,8 @@ function readShares(fd: FormData, type: AccountType, userId: string, memberIds: 
     shares.push({ user_id: userId, external_name: null, pct });
   }
   if (type === 'property') {
-    for (let i = 0; i < 3; i++) {
-      const name = String(fd.get(`ext_name_${i}`) ?? '').trim();
-      const pct = toNumber(fd.get(`ext_pct_${i}`));
-      if (name && pct && pct > 0) shares.push({ user_id: null, external_name: name, pct });
-      else if (name || pct) return 'Each co-owner outside the app needs both a name and a percentage.';
-    }
+    const extErr = readExternals('co-owner');
+    if (extErr) return extErr;
   }
   const err = validateShares(shares.map((s) => ({ pct: s.pct })), true);
   return err ?? shares;
@@ -93,7 +114,9 @@ export async function saveAccount(_prev: FormState, fd: FormData): Promise<FormS
       const members = (await getMembers(db)).map((m) => m.user_id);
       const shares = readShares(fd, type, userId, members);
       if (typeof shares === 'string') throw new UserError(shares);
-      const isJoint = shares.filter((s) => s.user_id).length > 1;
+      const appHolders = shares.filter((s) => s.user_id);
+      // Shared within the household if more than one app user holds it, or if it is held by a partner rather than you.
+      const isJoint = appHolders.length > 1 || appHolders.some((s) => s.user_id !== userId);
       const householdId = isJoint ? profile.household_id : null;
 
       let accountId = id;

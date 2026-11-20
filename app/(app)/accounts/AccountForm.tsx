@@ -27,6 +27,8 @@ export function AccountForm(props: {
   me: { id: string; name: string };
   partners: { id: string; name: string }[];
   properties: { id: string; name: string }[];
+  /** Ownership of each property, so a mortgage can optionally copy it. */
+  propertyShares?: Record<string, FormShare[]>;
   defaultCurrency: string;
   presetType?: AccountType;
 }) {
@@ -34,13 +36,25 @@ export function AccountForm(props: {
   const [state, action, pending] = useActionState<FormState, FormData>(saveAccount, null);
   const [type, setType] = useState<AccountType>(a?.type ?? props.presetType ?? 'bank');
   const existingMemberShares = (props.shares ?? []).filter((s) => s.user_id);
-  const [mode, setMode] = useState<'me' | 'joint'>(existingMemberShares.length > 1 ? 'joint' : 'me');
+  const sharedMortgage = a?.type === 'mortgage' && ((props.shares ?? []).length > 1 || (props.shares ?? []).some((s) => s.user_id !== props.me.id));
+  const [mode, setMode] = useState<'me' | 'joint'>(existingMemberShares.length > 1 || sharedMortgage ? 'joint' : 'me');
   const [source, setSource] = useState(a?.valuation_source ?? 'manual');
   const externals = (props.shares ?? []).filter((s) => s.external_name);
   const shareOf = (id: string, fallback: number) => props.shares?.find((s) => s.user_id === id)?.share_pct ?? fallback;
   const everyone = [props.me, ...props.partners];
   const jointDefault = Math.round((100 / everyone.length) * 100) / 100;
   const canJoint = props.partners.length > 0 && type !== 'pension';
+
+  // Mortgage holders – never filled in automatically; "copy the property's split" is opt-in.
+  const [linkedId, setLinkedId] = useState(a?.linked_property_id ?? '');
+  const [seed, setSeed] = useState<FormShare[] | null>(null);
+  const [seedKey, setSeedKey] = useState(0);
+  const linkedShares = (linkedId && props.propertyShares?.[linkedId]) || [];
+  const holderSrc = seed ?? (a ? props.shares ?? [] : []);
+  const holderExternals = holderSrc.filter((s) => s.external_name);
+  // When creating, suggest the property's outside co-owners by name only (no percentages).
+  const extNameHints = holderExternals.length || a ? holderExternals.map((s) => s.external_name ?? '') : linkedShares.filter((s) => s.external_name).map((s) => s.external_name ?? '');
+  const copyPropertySplit = () => { setSeed(linkedShares); setSeedKey(seedKey + 1); };
 
   return (
     <form action={action} className="card" style={{ maxWidth: 680 }}>
@@ -118,7 +132,7 @@ export function AccountForm(props: {
       {type === 'mortgage' && (
         <div className="field">
           <label htmlFor="linked_property_id">Which property is it for?</label>
-          <select id="linked_property_id" name="linked_property_id" defaultValue={a?.linked_property_id ?? ''}>
+          <select id="linked_property_id" name="linked_property_id" value={linkedId} onChange={(e) => setLinkedId(e.target.value)}>
             <option value="">Not linked</option>
             {props.properties.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
@@ -155,7 +169,47 @@ export function AccountForm(props: {
         </fieldset>
       )}
 
-      <fieldset>
+      {type === 'mortgage' ? (
+        <fieldset>
+          <legend>Who holds this mortgage?</legend>
+          <div className="row" style={{ marginBottom: 12 }}>
+            <label className="check"><input type="radio" name="owner_mode" value="me" checked={mode === 'me'} onChange={() => setMode('me')} /> Just me (100%)</label>
+            <label className="check"><input type="radio" name="owner_mode" value="joint" checked={mode === 'joint'} onChange={() => setMode('joint')} /> Shared</label>
+          </div>
+          {mode === 'joint' ? (
+            <div key={seedKey}>
+              <p className="hint" style={{ marginTop: 0 }}>
+                Enter each holder’s share of the mortgage. It doesn’t have to match who owns the property – e.g. you can own 50% of the home but hold the whole mortgage.
+              </p>
+              {linkedShares.length > 1 && (
+                <button type="button" className="btn secondary small" onClick={copyPropertySplit} style={{ marginBottom: 12 }}>
+                  Use the same split as the property
+                </button>
+              )}
+              <div className="grid grid-2" style={{ gap: 14 }}>
+                {everyone.map((m) => (
+                  <div className="field" key={m.id}>
+                    <label htmlFor={`share-${m.id}`}>{m.id === props.me.id ? 'My share' : `${m.name}’s share`} (%)</label>
+                    <input id={`share-${m.id}`} name={`share:${m.id}`} type="text" inputMode="decimal" placeholder="0"
+                      defaultValue={holderSrc.find((s) => s.user_id === m.id)?.share_pct ?? ''} />
+                  </div>
+                ))}
+              </div>
+              <p className="small" style={{ marginBottom: 8 }}><strong>Holders outside the app</strong> <span className="hint">optional</span></p>
+              {[0, 1, 2].map((i) => (
+                <div className="grid grid-2" style={{ gap: 14 }} key={i}>
+                  <div className="field"><input name={`ext_name_${i}`} type="text" placeholder="Name" defaultValue={extNameHints[i] ?? ''} aria-label={`Holder ${i + 1} name`} /></div>
+                  <div className="field"><input name={`ext_pct_${i}`} type="text" inputMode="decimal" placeholder="%" defaultValue={holderExternals[i]?.share_pct ?? ''} aria-label={`Holder ${i + 1} share`} /></div>
+                </div>
+              ))}
+              <p className="hint">Shares must add up to 100%. Your equity = your % of the property’s value minus your % of this mortgage.</p>
+            </div>
+          ) : (
+            <p className="small muted" style={{ marginTop: 0 }}>You hold the whole mortgage. Choose “Shared” if someone else holds part of it.</p>
+          )}
+        </fieldset>
+      ) : (
+        <fieldset>
         <legend>Who owns this?</legend>
         {canJoint && (
           <div className="row" style={{ marginBottom: 12 }}>
@@ -193,8 +247,8 @@ export function AccountForm(props: {
             <p className="hint">All shares together must add up to 100%. Your equity = your % of the value minus the mortgage you hold.</p>
           </>
         )}
-        {type === 'mortgage' && <p className="hint">Only list the people who hold the mortgage. Property ownership is set on the property itself.</p>}
       </fieldset>
+      )}
 
       <div className="field">
         <label htmlFor="notes">Notes <span className="hint">optional</span></label>
