@@ -10,7 +10,7 @@ async function saveSettings(fd: FormData) {
   const ccy = String(fd.get('display_currency') ?? 'EUR');
   if (!(CURRENCIES as readonly string[]).includes(ccy)) redirect('/settings');
   await withUser(userId, (db) =>
-    db.query('update profiles set name = $2, display_currency = $3 where user_id = $1', [userId, String(fd.get('name') ?? '').trim(), ccy]),
+    db.query('update profiles set name = $2, display_currency = $3 where user_id = $1', [userId, String(fd.get('name') ?? '').trim().slice(0, 120), ccy]),
   );
   revalidatePath('/', 'layout');
   redirect('/settings?saved=1');

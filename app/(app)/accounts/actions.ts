@@ -17,7 +17,7 @@ function readShares(fd: FormData, type: AccountType, userId: string, memberIds: 
   const shares: ShareInput[] = [];
   const readExternals = (who: string) => {
     for (let i = 0; i < 3; i++) {
-      const name = String(fd.get(`ext_name_${i}`) ?? '').trim();
+      const name = String(fd.get(`ext_name_${i}`) ?? '').trim().slice(0, 120);
       const pct = toNumber(fd.get(`ext_pct_${i}`));
       if (name && pct && pct > 0) shares.push({ user_id: null, external_name: name, pct });
       else if (name || pct) return `Each ${who} outside the app needs both a name and a percentage.`;
@@ -92,6 +92,8 @@ export async function saveAccount(_prev: FormState, fd: FormData): Promise<FormS
   const currency = String(fd.get('currency') ?? '').toUpperCase();
   if (!(ACCOUNT_TYPES as readonly string[]).includes(type)) return { error: 'Please choose an account type.' };
   if (!name) return { error: 'Please give the account a name.' };
+  if (name.length > 120) return { error: 'Please use a shorter name (up to 120 characters).' };
+  if (String(fd.get('notes') ?? '').length > 1000) return { error: 'Notes can be up to 1,000 characters.' };
   if (!(CURRENCIES as readonly string[]).includes(currency)) return { error: 'Please choose a currency.' };
 
   const amount = toNumber(fd.get('balance'));
@@ -104,10 +106,10 @@ export async function saveAccount(_prev: FormState, fd: FormData): Promise<FormS
     linked_property_id: type === 'mortgage' ? String(fd.get('linked_property_id') ?? '') || null : null,
     crypto_coin: coin,
     crypto_units: units,
-    property_country: type === 'property' ? String(fd.get('property_country') ?? '').toUpperCase() || null : null,
+    property_country: type === 'property' && /^[A-Za-z]{2}$/.test(String(fd.get('property_country') ?? '')) ? String(fd.get('property_country')).toUpperCase() : null,
     valuation_source: type === 'property' ? (fd.get('valuation_auto') === 'on' ? 'auto' : 'manual') : null,
     property_kind: type === 'property' && PROPERTY_KINDS.some((k) => k.id === kind) ? kind : null,
-    valuation_area: type === 'property' ? String(fd.get('valuation_area') ?? '').trim() || null : null,
+    valuation_area: type === 'property' ? String(fd.get('valuation_area') ?? '').trim().slice(0, 120) || null : null,
     notes: String(fd.get('notes') ?? '').trim() || null,
   };
 

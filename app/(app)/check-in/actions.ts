@@ -12,10 +12,10 @@ import { CURRENCIES, isDebt, monthStart, parseMonthParam, toNumber } from '@/lib
 export async function saveCheckin(fd: FormData) {
   const { userId, profile } = await requireUser();
   const month = parseMonthParam(String(fd.get('month') ?? '')) ?? monthStart();
-  if (month > monthStart()) redirect('/check-in?error=' + encodeURIComponent('You can’t check in for a future month.'));
+  if (month > monthStart()) redirect('/check-in?error=future');
   const income = toNumber(fd.get('income')); // empty = not entered
   const incomeCurrency = String(fd.get('income_currency') ?? profile.display_currency);
-  if (!(CURRENCIES as readonly string[]).includes(incomeCurrency)) redirect('/check-in?error=Unknown%20currency');
+  if (!(CURRENCIES as readonly string[]).includes(incomeCurrency)) redirect('/check-in?error=currency');
 
   await withUser(userId, async (db) => {
     const accounts = await getAccounts(db, userId);

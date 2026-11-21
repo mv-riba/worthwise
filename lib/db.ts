@@ -38,3 +38,27 @@ export async function withUser<T>(userId: string, fn: (db: Db) => Promise<T>): P
     client.release();
   }
 }
+
+/**
+ * For requests before anyone is signed in (e.g. rate limiting sign-in attempts).
+ * Runs as the restricted role with no user set, so no personal data is visible.
+ */
+export async function withAnon<T>(fn: (db: Db) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('begin');
+    await client.query('set local role worthwise_app');
+    await client.query("select set_config('app.user_id', '', true)");
+    const result = await fn(client);
+    await client.query('commit');
+    return result;
+  } catch (err) {
+    await client.query('rollback').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Postgres error code for "function does not exist" (database not yet updated). */
+export const isMissingFunction = (e: unknown) => !!e && typeof e === 'object' && (e as { code?: string }).code === '42883';

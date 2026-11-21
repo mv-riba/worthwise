@@ -1,6 +1,6 @@
 // Calls to free public data sources. Every function fails softly (returns null)
 // so the app keeps working if a source is down.
-import type { Db } from '@/lib/db';
+import { isMissingFunction, type Db } from '@/lib/db';
 import { EUROSTAT_COUNTRIES, addMonths, coinSymbol, monthStart, planValuation } from '@/lib/core/constants';
 import { periodToMonth, type IndexPoint } from '@/lib/core/calc';
 
@@ -31,6 +31,31 @@ function lastDayOfMonth(month: string) {
   return next.toISOString().slice(0, 10);
 }
 
+
+/**
+ * Saves one rate through the database's checked function. A rejected value is
+ * skipped (inside a savepoint) so it can't break the rest of the request.
+ */
+async function saveRate(db: Db, month: string, currency: string, perEur: number, overwrite: boolean) {
+  await db.query('savepoint save_rate');
+  try {
+    await db.query('select save_exchange_rate($1, $2, $3, $4)', [month, currency, perEur, overwrite]);
+    await db.query('release savepoint save_rate');
+  } catch (e) {
+    await db.query('rollback to savepoint save_rate');
+    if (isMissingFunction(e)) {
+      // database not updated yet (run `npm run db:setup`): fall back to the old direct write
+      await db.query(
+        `insert into exchange_rates (month, currency, per_eur) values ($1, $2, $3)
+         on conflict (month, currency) do ${overwrite ? 'update set per_eur = excluded.per_eur, fetched_at = now()' : 'nothing'}`,
+        [month, currency, perEur],
+      ).catch(() => {});
+    } else {
+      console.warn(`Exchange rate ${currency} ${month} rejected`, (e as Error).message);
+    }
+  }
+}
+
 /** Makes sure rates for `month` are stored for each currency. Returns the rates map (per EUR). */
 export async function ensureRatesForMonth(db: Db, month: string, currencies: string[]) {
   const wanted = [...new Set(currencies.filter((c) => c && c !== 'EUR'))];
@@ -50,11 +75,7 @@ export async function ensureRatesForMonth(db: Db, month: string, currencies: str
     if (data?.rates) {
       for (const [cur, val] of Object.entries<number>(data.rates)) {
         rates[cur] = val;
-        await db.query(
-          `insert into exchange_rates (month, currency, per_eur) values ($1, $2, $3)
-           on conflict (month, currency) do update set per_eur = excluded.per_eur, fetched_at = now()`,
-          [month, cur, val],
-        );
+        await saveRate(db, month, cur, val, true);
       }
     }
   }
@@ -80,10 +101,7 @@ export async function backfillRates(db: Db, fromMonth: string, currencies: strin
   for (const day of Object.keys(data.rates).sort()) perMonth.set(day.slice(0, 7) + '-01', data.rates[day]);
   for (const [month, rates] of perMonth) {
     for (const [cur, val] of Object.entries(rates)) {
-      await db.query(
-        `insert into exchange_rates (month, currency, per_eur) values ($1, $2, $3) on conflict (month, currency) do nothing`,
-        [month, cur, val],
-      );
+      await saveRate(db, month, cur, val, false);
     }
   }
 }

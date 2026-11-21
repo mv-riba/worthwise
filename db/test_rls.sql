@@ -21,7 +21,7 @@ commit;
 
 -- rates: 1 EUR = 0.87 GBP (Oct), 0.88 GBP (Nov)
 begin; set local role worthwise_app; select pg_temp.as_user('maria');
-insert into exchange_rates (month, currency, per_eur) values ('2026-10-01','GBP',0.87), ('2026-11-01','GBP',0.88);
+select save_exchange_rate('2026-10-01','GBP',0.87,true); select save_exchange_rate('2026-11-01','GBP',0.88,true);
 
 -- Maria: individual bank (EUR), fixed savings (GBP); joint property + mortgage
 insert into accounts (id, created_by, type, name, currency) values
@@ -116,6 +116,42 @@ insert into checkins (user_id, month, income, income_currency) values ('mikko', 
   on conflict (user_id, month) do update set income = excluded.income;
 update checkins set estimated_spending = (select spending from household_monthly_summary('GBP') where is_me and month = '2026-11-01') where user_id = 'mikko' and month = '2026-11-01';
 select income, estimated_spending from checkins;
-insert into exchange_rates (month, currency, per_eur) values ('2026-11-01','USD',1.08) on conflict (month, currency) do update set per_eur = excluded.per_eur, fetched_at = now();
+select save_exchange_rate('2026-11-01','USD',1.08,true);
 update profiles set name = 'Mikko K', display_currency = 'GBP' where user_id = 'mikko';
 rollback;
+
+\set ON_ERROR_STOP 0
+\echo '== Security v3 checks'
+\echo '-- direct write to exchange rates (expect permission denied):'
+begin; set local role worthwise_app; select pg_temp.as_user('eve');
+insert into exchange_rates (month, currency, per_eur) values ('2026-11-01','GBP',5);
+rollback;
+\echo '-- implausible rate via function (expect implausible rate):'
+begin; set local role worthwise_app; select pg_temp.as_user('eve');
+select save_exchange_rate('2026-11-01','GBP',5,true);
+rollback;
+\echo '-- not signed in (expect not signed in):'
+begin; set local role worthwise_app;
+select save_exchange_rate('2026-11-01','GBP',0.88,true);
+rollback;
+\echo '-- rate limit table not readable (expect permission denied):'
+begin; set local role worthwise_app; select pg_temp.as_user('eve');
+select count(*) from rate_limit_events;
+rollback;
+\echo '-- household full: eve tries the current code (expect already full):'
+begin; set local role worthwise_app; select pg_temp.as_user('maria');
+select invite_code as code2 from households where id = my_household() \gset
+commit;
+begin; set local role worthwise_app; select pg_temp.as_user('eve');
+select join_household(:'code2');
+rollback;
+\echo '-- old code was rotated after Mikko joined (expect codes differ):'
+select :'code' <> :'code2' as rotated;
+\echo '-- guessing: 6th wrong code within an hour (expect Too many attempts on the last one):'
+begin; set local role worthwise_app; select pg_temp.as_user('eve'); select join_household('WRONG1') as result; commit;
+begin; set local role worthwise_app; select pg_temp.as_user('eve'); select join_household('WRONG2') as result; commit;
+begin; set local role worthwise_app; select pg_temp.as_user('eve'); select join_household('WRONG3') as result; commit;
+begin; set local role worthwise_app; select pg_temp.as_user('eve'); select join_household('WRONG4') as result; commit;
+begin; set local role worthwise_app; select pg_temp.as_user('eve'); select join_household('WRONG5') as result; commit;
+begin; set local role worthwise_app; select pg_temp.as_user('eve'); select join_household('WRONG6') as result; commit;
+begin; set local role worthwise_app; select pg_temp.as_user('eve'); select join_household('WRONG7') as result; commit;

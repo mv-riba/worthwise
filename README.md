@@ -71,6 +71,10 @@ Open http://localhost:3000. Create an account, add a couple of accounts, then do
 4. Deploy. Then go to **Settings → Domains** and add your domain, e.g. `worthwise.yourdomain.com`.
 5. In Neon's **Auth** settings, add that domain to the list of allowed domains, if it has one, so sign-in works there.
 
+### Security
+
+See [SECURITY.md](SECURITY.md) for how your data is protected, and a one-time checklist of settings to switch on.
+
 ### Installing an update
 
 1. Unzip the new version somewhere else, for example in Downloads.

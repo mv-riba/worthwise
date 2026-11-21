@@ -50,8 +50,8 @@ export function ResetForm({ email }: { email: string }) {
       <input type="hidden" name="email" value={email} />
       <CodeInput />
       <div className="field">
-        <label htmlFor="password">New password</label>
-        <input id="password" name="password" type="password" autoComplete="new-password" required minLength={8} />
+        <label htmlFor="password">New password <span className="hint">at least 12 characters</span></label>
+        <input id="password" name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={128} />
       </div>
       {state?.error && <p className="error">{state.error}</p>}
       <Submit pending={pending} label="Set new password" />

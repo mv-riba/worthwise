@@ -1,9 +1,17 @@
 import { requireUser } from '@/lib/session';
 import { withUser } from '@/lib/db';
 import { getMembers } from '@/lib/data';
-import { createHousehold, joinHousehold, leaveHousehold, renameHousehold } from './actions';
+import { createHousehold, joinHousehold, leaveHousehold, regenerateInviteCode, renameHousehold } from './actions';
 
-export default async function HouseholdPage({ searchParams }: { searchParams: Promise<{ error?: string; joined?: string }> }) {
+const ERRORS: Record<string, string> = {
+  not_found: 'That invite code wasn’t found. Codes work only once – ask your partner for the current one.',
+  full: 'That household already has two people in it.',
+  already_in_household: 'You’re already in a household. Leave it first to join another.',
+  too_many_attempts: 'Too many attempts. For your security, please wait an hour and try again.',
+  failed: 'Something went wrong. Please try again.',
+};
+
+export default async function HouseholdPage({ searchParams }: { searchParams: Promise<{ error?: string; joined?: string; newcode?: string }> }) {
   const sp = await searchParams;
   const { userId } = await requireUser();
   const d = await withUser(userId, async (db) => {
@@ -15,16 +23,19 @@ export default async function HouseholdPage({ searchParams }: { searchParams: Pr
     <div style={{ maxWidth: 760 }}>
       <h1>Household</h1>
       <p className="muted">Partners each keep their own login and accounts. In a shared household you can see each other’s total net worth and your combined total – never each other’s individual accounts. Joint accounts are stored once and split by ownership share.</p>
-      {sp.error && <p className="error">{sp.error}</p>}
+      {sp.error && <p className="error">{ERRORS[sp.error] ?? ERRORS.failed}</p>}
+      {sp.newcode && <p className="notice">Here’s a new invite code. The old one no longer works.</p>}
       {sp.joined && <p className="notice">You’ve joined the household. Your combined view is now on the dashboard.</p>}
 
       {d.household ? (
         <div className="stack">
-          <div className="card peri">
+          {d.members.length < 2 && <div className="card peri">
             <div className="card-title">Invite your partner</div>
             <p style={{ marginBottom: 6 }}>Ask them to create their own Worthwise account, open <strong>Household</strong> and enter this code:</p>
-            <div className="big num" style={{ letterSpacing: '0.15em' }}>{d.household.invite_code}</div>
-          </div>
+            <div className="big num" style={{ letterSpacing: '0.12em', fontSize: '2rem' }}>{d.household.invite_code}</div>
+            <p className="small" style={{ marginTop: 8, marginBottom: 8 }}>Only share it with your partner, in person or by private message. It works once, and a household can have two people.</p>
+            <form action={regenerateInviteCode}><button className="btn secondary small" type="submit">Make a new code</button></form>
+          </div>}
           <div className="card">
             <h2>{d.household.name}</h2>
             <ul className="list">

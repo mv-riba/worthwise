@@ -53,7 +53,7 @@ export default async function CheckinPage({ searchParams }: { searchParams: Prom
       {safeMonth !== current && (
         <p className="notice small">You’re filling in a past month. It will be saved with that month’s exchange rates, so your trend can start from the real beginning.</p>
       )}
-      {sp.error && <p className="error">{sp.error}</p>}
+      {sp.error && <p className="error">{sp.error === 'future' ? 'You can’t check in for a future month.' : sp.error === 'currency' ? 'Please choose a currency from the list.' : 'Something went wrong. Please try again.'}</p>}
 
       {d.accounts.length === 0 ? (
         <div className="card">

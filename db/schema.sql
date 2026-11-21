@@ -23,6 +23,21 @@ grant worthwise_app to current_user;
 
 grant usage on schema public to worthwise_app;
 
+-- Invite codes: 12 characters from a cryptographically strong random source
+-- (gen_random_uuid), using letters and digits that are hard to confuse.
+create or replace function new_invite_code() returns text
+language plpgsql volatile as $$
+declare
+  alphabet constant text := 'ABCDEFGHJKMNPQRSTVWXYZ23456789';
+  raw bytea := decode(replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''), 'hex');
+  code text := '';
+begin
+  for i in 0..11 loop
+    code := code || substr(alphabet, (get_byte(raw, i) % length(alphabet)) + 1, 1);
+  end loop;
+  return code;
+end $$;
+
 -- ---------------------------------------------------------------------
 -- 1. Tables
 -- ---------------------------------------------------------------------
@@ -31,7 +46,7 @@ grant usage on schema public to worthwise_app;
 create table if not exists households (
   id           uuid primary key default gen_random_uuid(),
   name         text not null default 'Our household',
-  invite_code  text not null unique default upper(substr(md5(random()::text || clock_timestamp()::text), 1, 8)),
+  invite_code  text not null unique default new_invite_code(),
   created_by   text not null,
   created_at   timestamptz not null default now()
 );
@@ -155,6 +170,32 @@ alter table snapshots add column if not exists price_source text;
 alter table checkins alter column income drop not null;
 alter table checkins alter column income drop default;
 
+-- Security hardening (v3)
+alter table households alter column invite_code set default new_invite_code();
+-- replace old 8-character codes with strong 12-character ones
+update households set invite_code = new_invite_code() where length(invite_code) < 12;
+alter table households add column if not exists max_members int not null default 2;
+
+-- Sensible size limits on text people type in
+alter table accounts drop constraint if exists accounts_text_lengths;
+alter table accounts add constraint accounts_text_lengths check (
+  length(name) <= 120 and coalesce(length(notes), 0) <= 1000 and coalesce(length(valuation_area), 0) <= 120
+  and coalesce(length(crypto_coin), 0) <= 12 and coalesce(length(property_country), 0) <= 2) not valid;
+alter table profiles drop constraint if exists profiles_text_lengths;
+alter table profiles add constraint profiles_text_lengths check (length(name) <= 120) not valid;
+alter table households drop constraint if exists households_text_lengths;
+alter table households add constraint households_text_lengths check (length(name) <= 120) not valid;
+alter table ownership_shares drop constraint if exists shares_text_lengths;
+alter table ownership_shares add constraint shares_text_lengths check (coalesce(length(external_name), 0) <= 120) not valid;
+
+-- Attempt log for rate limiting sign-in, codes and invites (no passwords stored).
+create table if not exists rate_limit_events (
+  bucket  text not null,          -- e.g. 'sign-in:email:<hash>' or 'sign-in:ip:<hash>'
+  at      timestamptz not null default now()
+);
+create index if not exists rate_limit_events_idx on rate_limit_events (bucket, at);
+alter table rate_limit_events enable row level security;  -- no policies: only the function below can use it
+
 -- ---------------------------------------------------------------------
 -- 2. Helper functions used by the security rules
 -- ---------------------------------------------------------------------
@@ -225,22 +266,79 @@ begin
   return h;
 end $$;
 
-create or replace function join_household(p_code text) returns households
+-- Returns 'joined', 'not_found', 'full', 'already_in_household' or 'too_many_attempts'.
+-- It never raises an error for a wrong code, so every attempt is counted.
+drop function if exists join_household(text);
+create or replace function join_household(p_code text) returns text
 language plpgsql security definer set search_path = public as $$
 declare h households;
 begin
   if app_uid() is null then raise exception 'not signed in'; end if;
-  if my_household() is not null then raise exception 'You are already in a household'; end if;
-  select * into h from households where invite_code = upper(trim(p_code));
-  if h.id is null then raise exception 'That invite code was not found'; end if;
+  if my_household() is not null then return 'already_in_household'; end if;
+  -- at most 5 tries per hour per person, so codes can't be guessed
+  if not rate_limit_hit('join:' || app_uid(), 5, interval '1 hour') then return 'too_many_attempts'; end if;
+  select * into h from households where invite_code = upper(regexp_replace(coalesce(p_code, ''), '[^A-Za-z0-9]', '', 'g'));
+  if h.id is null then return 'not_found'; end if;
+  if (select count(*) from profiles where household_id = h.id) >= h.max_members then return 'full'; end if;
   update profiles set household_id = h.id where user_id = app_uid();
-  return h;
+  -- codes work once: a new one is made as soon as someone joins
+  update households set invite_code = new_invite_code() where id = h.id;
+  return 'joined';
 end $$;
 
 create or replace function leave_household() returns void
 language plpgsql security definer set search_path = public as $$
 begin
   update profiles set household_id = null where user_id = app_uid();
+end $$;
+
+-- Records an attempt and says whether it is allowed: at most p_max attempts
+-- per bucket within p_window. Old entries are cleaned up as it goes.
+create or replace function rate_limit_hit(p_bucket text, p_max int, p_window interval) returns boolean
+language plpgsql volatile security definer set search_path = public as $$
+declare n int;
+begin
+  if length(p_bucket) > 200 then return false; end if;
+  delete from rate_limit_events where at < now() - interval '1 day';
+  select count(*) into n from rate_limit_events where bucket = p_bucket and at > now() - p_window;
+  if n >= p_max then return false; end if;
+  insert into rate_limit_events (bucket) values (p_bucket);
+  return true;
+end $$;
+
+-- Exchange rates are shared by everyone, so the app can only save them through
+-- this function, which rejects malformed or implausible values.
+create or replace function save_exchange_rate(p_month date, p_currency text, p_per_eur numeric, p_overwrite boolean)
+returns void
+language plpgsql volatile security definer set search_path = public as $$
+declare near numeric;
+begin
+  if app_uid() is null then raise exception 'not signed in'; end if;
+  if p_currency !~ '^[A-Z]{3}$' or p_currency = 'EUR' then raise exception 'bad currency'; end if;
+  if p_month <> date_trunc('month', p_month)::date or p_month > date_trunc('month', now())::date
+     or p_month < date '1999-01-01' then raise exception 'bad month'; end if;
+  if p_per_eur is null or p_per_eur <= 0 or p_per_eur > 1e7 then raise exception 'bad rate'; end if;
+  -- compare with the nearest stored month: a real monthly move is never 3x
+  select per_eur into near from exchange_rates where currency = p_currency
+   order by abs(month - p_month) limit 1;
+  if near is not null and (p_per_eur > near * 3 or p_per_eur < near / 3) then raise exception 'implausible rate'; end if;
+  if p_overwrite then
+    insert into exchange_rates (month, currency, per_eur) values (p_month, p_currency, p_per_eur)
+    on conflict (month, currency) do update set per_eur = excluded.per_eur, fetched_at = now();
+  else
+    insert into exchange_rates (month, currency, per_eur) values (p_month, p_currency, p_per_eur)
+    on conflict (month, currency) do nothing;
+  end if;
+end $$;
+
+-- A fresh invite code for your household (the old one stops working).
+create or replace function regenerate_invite_code() returns text
+language plpgsql volatile security definer set search_path = public as $$
+declare c text;
+begin
+  if my_household() is null then raise exception 'You are not in a household'; end if;
+  update households set invite_code = new_invite_code() where id = my_household() returning invite_code into c;
+  return c;
 end $$;
 
 -- ---------------------------------------------------------------------
@@ -417,10 +515,9 @@ create policy property_values_all on property_values for all to worthwise_app
 -- Exchange rates are public reference data, shared by everyone.
 drop policy if exists rates_read on exchange_rates;
 create policy rates_read on exchange_rates for select to worthwise_app using (true);
+-- No direct writes: rates are saved only through save_exchange_rate().
 drop policy if exists rates_write on exchange_rates;
-create policy rates_write on exchange_rates for insert to worthwise_app with check (true);
 drop policy if exists rates_update on exchange_rates;
-create policy rates_update on exchange_rates for update to worthwise_app using (true) with check (true);
 
 -- ---------------------------------------------------------------------
 -- 6. Permissions for the app role
@@ -433,15 +530,19 @@ revoke update on profiles from worthwise_app;
 grant update (name, email, display_currency) on profiles to worthwise_app;  -- not household_id
 
 grant select, insert, update, delete on accounts, ownership_shares, checkins, snapshots, property_values to worthwise_app;
-grant select, insert, update on exchange_rates to worthwise_app;
+revoke insert, update, delete on exchange_rates from worthwise_app;
+grant select on exchange_rates to worthwise_app;
+revoke all on rate_limit_events from worthwise_app;
 
 revoke execute on function my_household(), is_household_member(text), can_see_account(uuid),
   create_household(text), join_household(text), leave_household(), household_monthly_summary(char),
-  household_currencies() from public;
+  household_currencies(), rate_limit_hit(text, int, interval), save_exchange_rate(date, text, numeric, boolean),
+  regenerate_invite_code(), new_invite_code() from public;
 grant execute on function app_uid(), my_household(), is_household_member(text), can_see_account(uuid),
   rate_per_eur(char, date), fx(numeric, char, char, date),
   create_household(text), join_household(text), leave_household(), household_monthly_summary(char),
-  household_currencies()
+  household_currencies(), rate_limit_hit(text, int, interval), save_exchange_rate(date, text, numeric, boolean),
+  regenerate_invite_code()
   to worthwise_app;
 
 -- Done! Run db/check.sql to confirm everything is in place.

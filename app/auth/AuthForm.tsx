@@ -32,9 +32,9 @@ export function AuthForm({ mode, notice }: { mode: 'sign-in' | 'sign-up'; notice
               <input id="email" name="email" type="email" autoComplete="email" required />
             </div>
             <div className="field">
-              <label htmlFor="password">Password</label>
+              <label htmlFor="password">Password {mode === 'sign-up' && <span className="hint">at least 12 characters</span>}</label>
               <input
-                id="password" name="password" type="password" required minLength={8}
+                id="password" name="password" type="password" required minLength={mode === 'sign-up' ? 12 : undefined} maxLength={128}
                 autoComplete={mode === 'sign-in' ? 'current-password' : 'new-password'}
               />
             </div>
