@@ -125,7 +125,7 @@ export function parseMonthParam(v: string | undefined | null): string | null {
 export function monthLabel(month: string, style: 'short' | 'long' = 'short') {
   const [y, m] = month.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString('en-GB', {
-    month: style === 'short' ? 'short' : 'long', year: style === 'short' ? '2-digit' : 'numeric', timeZone: 'UTC',
+    month: style === 'short' ? 'short' : 'long', year: 'numeric', timeZone: 'UTC',
   });
 }
 
